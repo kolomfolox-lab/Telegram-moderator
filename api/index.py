@@ -11,20 +11,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vercel")
 
 app = FastAPI(docs_url=None, redoc_url=None)
-TARGET_CHAT_ID = os.getenv("TARGET_CHAT_ID")
+_resolved_chat_id = None
 
 if GROQ_API_KEY:
     init_client(GROQ_API_KEY)
 
-
-def _is_target_chat(chat_id) -> bool:
-    if not TARGET_CHAT_ID:
-        return True
-    return str(chat_id) == str(TARGET_CHAT_ID)
+TARGET_USERNAME = CHAT_USERNAME.lstrip("@").lower()
 
 
 @app.post("/webhook")
 async def handle_webhook(request: Request):
+    global _resolved_chat_id
+
     try:
         update = await request.json()
     except Exception:
@@ -34,14 +32,19 @@ async def handle_webhook(request: Request):
     if not message:
         return {"ok": True}
 
-    chat_id = message.get("chat", {}).get("id")
+    chat = message.get("chat", {})
+    chat_id = chat.get("id")
+    chat_username = chat.get("username", "").lower()
     text = message.get("text") or message.get("caption", "")
 
     if not chat_id or not text:
         return {"ok": True}
 
-    if not _is_target_chat(chat_id):
+    if chat_username != TARGET_USERNAME:
         return {"ok": True}
+
+    if _resolved_chat_id is None:
+        _resolved_chat_id = chat_id
 
     is_spam_flag, reason, confidence = await is_spam(text)
 
@@ -60,9 +63,11 @@ async def handle_webhook(request: Request):
 
 @app.get("/cron")
 async def cron_check():
-    if TARGET_CHAT_ID:
+    chat = await get_chat(BOT_TOKEN, CHAT_USERNAME)
+    chat_id = chat.get("id")
+    if chat_id:
         await send_message(
-            BOT_TOKEN, int(TARGET_CHAT_ID),
+            BOT_TOKEN, chat_id,
             "Periodic check completed"
         )
     return {"ok": True}
@@ -83,7 +88,7 @@ async def setup(request: Request):
         "webhook": wh.get("description", "OK"),
         "chat": CHAT_USERNAME,
         "chat_id": chat_id,
-        "note": f"Add TARGET_CHAT_ID={chat_id} to Vercel env vars for chat filtering"
+        "note": "Бот работает через CHAT_USERNAME, TARGET_CHAT_ID не нужен"
     }
 
 
