@@ -18,3 +18,5 @@ services:
         value: "llama-3.1-8b-instant"
       - key: SPAM_CONFIDENCE_THRESHOLD
         value: "0.2"
+      - key: ADMIN_USERNAMES
+        value: "Dilshod_Eshmurodov,cesicu"

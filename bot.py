@@ -11,6 +11,7 @@ from config import (
     CHECK_INTERVAL_MINUTES, GROQ_MODEL, SPAM_CONFIDENCE_THRESHOLD
 )
 from spam_detector import is_spam, init_client
+from src.admin import is_admin, parse_command, get_help_text, stats
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -36,11 +37,13 @@ async def check_and_act(message, context):
 
         try:
             await message.delete()
+            stats.record_delete()
             logger.info(f"Deleted (conf={confidence:.2f}): {reason}")
 
             if user_id:
                 try:
                     await context.bot.ban_chat_member(chat_id, user_id)
+                    stats.record_ban(user_id)
                     logger.info(f"Banned {user_id}: {reason}")
                 except TelegramError as e:
                     if "user is an administrator" in str(e).lower():
@@ -62,6 +65,30 @@ async def handle_message(update, context):
         return
 
     chat = message.chat
+    user = message.from_user
+
+    # Handle private admin commands
+    if chat.type == "private" and user:
+        username = user.username
+        if is_admin(username) and message.text:
+            cmd_type, params = parse_command(message.text)
+            if cmd_type == "start":
+                await message.reply_text(f"Welcome admin @{username}!\n\n{get_help_text()}")
+            elif cmd_type == "help":
+                await message.reply_text(get_help_text())
+            elif cmd_type == "stats":
+                await message.reply_text(stats.to_text())
+            elif cmd_type == "setinterval":
+                interval = params["interval"]
+                stats.check_interval_minutes = interval
+                await message.reply_text(f"Interval set to {interval} minutes")
+            elif cmd_type == "error":
+                await message.reply_text(params["msg"])
+            else:
+                await message.reply_text("Unknown command. Send /help")
+        return
+
+    # Handle group messages
     if target_chat_id and chat.id != target_chat_id:
         return
 
@@ -115,19 +142,10 @@ async def start(update, context):
     await update.message.reply_text(
         f"Moderator Bot Active\n\n"
         f"Chat: {CHAT_USERNAME}\n"
-        f"Check interval: {CHECK_INTERVAL_MINUTES} min\n"
+        f"Check interval: {stats.check_interval_minutes} min\n"
         f"GROQ model: {GROQ_MODEL}\n"
         f"Confidence threshold: {SPAM_CONFIDENCE_THRESHOLD}\n\n"
         f"Add bot as admin with delete & ban permissions."
-    )
-
-
-async def stats(update, context):
-    await update.message.reply_text(
-        f"Stats\n"
-        f"Stored messages: {len(recent_messages)}\n"
-        f"Checked IDs: {len(checked_ids)}\n"
-        f"Chat ID: {target_chat_id}"
     )
 
 
@@ -185,7 +203,6 @@ def main():
     app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
     app.add_handler(MessageHandler(
         filters.ALL & ~filters.COMMAND,
         handle_message
@@ -193,7 +210,7 @@ def main():
 
     app.job_queue.run_repeating(
         periodic_check,
-        interval=CHECK_INTERVAL_MINUTES * 60,
+        interval=stats.check_interval_minutes * 60,
         first=30
     )
 
