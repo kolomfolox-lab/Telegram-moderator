@@ -54,6 +54,9 @@ async def is_spam(text: str) -> tuple:
     if keyword_hits >= 3:
         return True, f"ключевые слова ({keyword_hits})", 0.95
 
+    if client is None:
+        return keyword_hits >= 2, "клиент не инициализирован", 0.5 if keyword_hits >= 2 else 0.0
+
     try:
         response = await client.chat.completions.create(
             model=GROQ_MODEL,
@@ -65,8 +68,11 @@ async def is_spam(text: str) -> tuple:
             max_tokens=150
         )
 
-        content = response.choices[0].message.content.strip()
-        content = content.replace("```json", "").replace("```", "").strip()
+        raw = response.choices[0].message.content
+        if not raw:
+            return keyword_hits >= 2, "пустой ответ GROQ", 0.5 if keyword_hits >= 2 else 0.0
+
+        content = raw.strip().replace("```json", "").replace("```", "").strip()
         result = json.loads(content)
 
         is_spam_flag = result.get("is_spam", False)

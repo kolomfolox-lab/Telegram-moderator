@@ -3,16 +3,19 @@ import logging
 
 from fastapi import FastAPI, Request
 
-from config import BOT_TOKEN, CHAT_USERNAME, SPAM_CONFIDENCE_THRESHOLD, GROQ_API_KEY
+from config import BOT_TOKEN, CHAT_USERNAME, SPAM_CONFIDENCE_THRESHOLD, GROQ_API_KEY, CHECK_INTERVAL_MINUTES
 from spam_detector import init_client, is_spam
 from src.telegram import delete_message, ban_chat_member, get_chat, send_message, set_webhook
 from src.admin import is_admin, parse_command, get_help_text, stats
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("vercel")
+logging.basicConfig(level=logging.INFO, force=True)
+logger = logging.getLogger("api")
 
 app = FastAPI(docs_url=None, redoc_url=None)
 _resolved_chat_id = None
+
+logger.info(f"Starting with GROQ_API_KEY={'✅ set' if GROQ_API_KEY else '❌ MISSING'}")
+logger.info(f"Starting with BOT_TOKEN={'✅ set' if BOT_TOKEN else '❌ MISSING'}")
 
 if GROQ_API_KEY:
     init_client(GROQ_API_KEY)
@@ -135,6 +138,34 @@ async def setup(request: Request):
     }
 
 
+@app.get("/health")
+async def health():
+    chat_id_info = _resolved_chat_id or "not yet resolved (wait for first message)"
+    webhook_info = "call /setup to configure"
+    try:
+        wh = await get_chat(BOT_TOKEN, CHAT_USERNAME)
+        webhook_info = "setup complete" if wh.get("id") else "call /setup"
+    except Exception:
+        pass
+
+    return {
+        "status": "running",
+        "config": {
+            "bot_token": "✅" if BOT_TOKEN else "❌",
+            "groq_api_key": "✅" if GROQ_API_KEY else "❌",
+            "chat_username": CHAT_USERNAME,
+            "interval": stats.check_interval_minutes,
+        },
+        "stats": {
+            "deleted": stats.total_deleted,
+            "banned": stats.total_banned,
+            "chat_id": chat_id_info,
+        },
+        "webhook": webhook_info,
+        "setup": f"Visit /setup to configure Telegram webhook",
+    }
+
+
 @app.get("/")
 async def root():
     return {
@@ -143,7 +174,9 @@ async def root():
         "admins": ["@Dilshod_Eshmurodov", "@cesicu"],
         "endpoints": {
             "POST /webhook": "Telegram webhook",
-            "GET /setup": "Configure webhook",
+            "GET /setup": "Configure webhook (REQUIRED after deploy)",
+            "GET /health": "Check bot status",
             "GET /cron": "Periodic check"
-        }
+        },
+        "setup_required": "Visit /setup to connect Telegram bot"
     }
